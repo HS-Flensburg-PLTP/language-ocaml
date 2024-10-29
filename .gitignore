@@ -1,0 +1,4 @@
+.DS_Store
+*.bak
+.stack-work/
+dist-newstyle/
