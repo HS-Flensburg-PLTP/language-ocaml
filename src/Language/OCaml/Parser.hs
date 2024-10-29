@@ -165,7 +165,7 @@ longidentParser = quotedParser longidentParserRec
 
 positionParser :: Parsec Void String (Int, Int, Int)
 positionParser =
-  (\lnum bol cnumMinusBol -> (lnum, bol, cnumMinusBol + bol))
+  (,,)
     <$ char '['
     <*> decimal
     <* char ','
