@@ -83,6 +83,7 @@ module Language.OCaml.AST
     DirectiveArgument (..),
     DirectiveArgumentDesc (..),
     ToplevelDirective (..),
+    pretty,
   )
 where
 
@@ -121,6 +122,11 @@ data Longident
   | Ldot Longident String
   | Lapply Longident Longident
   deriving (Show, Data)
+
+pretty :: Longident -> String
+pretty (Lident ident) = ident
+pretty (Ldot longident ident) = pretty longident ++ "." ++ ident
+pretty (Lapply longident1 longident2) = pretty longident1 ++ "(" ++ pretty longident2 ++ ")"
 
 type Label = String
 

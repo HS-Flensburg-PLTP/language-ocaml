@@ -106,16 +106,16 @@ uidentParser = (:) <$> upperChar <*> many (letterChar <|> digitChar <|> char '_'
 lidentParser :: Parsec Void String String
 lidentParser = (:) <$> (lowerChar <|> char '_') <*> many (letterChar <|> digitChar <|> char '_' <|> char '\'')
 
-opParser :: Parsec Void String String
-opParser = some (oneOf (symbols ++ extraSymbols))
+symbolOpParser :: Parsec Void String String
+symbolOpParser = some (oneOf (symbols ++ extraSymbols))
   where
     symbols :: [Char]
     symbols = "!$%&*+-./:<=>?@^|~#"
     extraSymbols :: [Char]
     extraSymbols = "()[]{}"
 
-nameopParser :: Parsec Void String String
-nameopParser =
+nameOpParser :: Parsec Void String String
+nameOpParser =
   (\str c1 str2 -> str ++ c1 : str2)
     <$> (string "and" <|> string "let")
     <*> oneOf kwdopchar
@@ -126,17 +126,23 @@ nameopParser =
     dotsymbolchar :: [Char]
     dotsymbolchar = "!$%&*+-/:=>?@^|"
 
-identParser :: Parsec Void String String
-identParser = uidentParser <|> lidentParser <|> opParser
-
 moduleNameParser :: Parsec Void String String
 moduleNameParser = uidentParser <|> string "_"
 
 constrIdentParser :: Parsec Void String String
 constrIdentParser = uidentParser <|> string "()" <|> string "::" <|> string "[]" <|> string "true" <|> string "false"
 
+valueIdentParser :: Parsec Void String String
+valueIdentParser = try nameOpParser <|> symbolOpParser <|> lidentParser
+
+identParser :: Parsec Void String String
+identParser = try nameOpParser <|> symbolOpParser <|> lidentParser <|> uidentParser
+
 attributeNameParser :: Parsec Void String String
 attributeNameParser = uidentParser <|> lidentParser <|> ((:) <$> char '%' <*> lidentParser)
+
+labelParser :: Parsec Void String Label
+labelParser = lidentParser <|> uidentParser
 
 -- | The original grammar A -> ident | A . ident | A ( A ) is left recursive, therefore, we use
 --   `A -> ident A'` and `A' -> . ident A' | ( A ) A' | ε`
@@ -163,10 +169,11 @@ longidentParser = quotedParser longidentParserRec
 
 -- Locations
 
-positionParser :: Parsec Void String (Int, Int, Int)
+positionParser :: Parsec Void String Position
 positionParser =
-  (,,)
-    <$ char '['
+  Position
+    <$> takeWhileP Nothing (/= '[')
+    <* char '['
     <*> decimal
     <* char ','
     <*> decimal
@@ -175,15 +182,10 @@ positionParser =
     <*> (decimal <|> -1 <$ string "-1")
     <* char ']'
 
-makePosition :: String -> (Int, Int, Int) -> Position
-makePosition fname (lnum, bol, cnum) =
-  Position {posFname = fname, posLnum = lnum, posBol = bol, posCnum = cnum}
-
 locationParser :: Parsec Void String Location
 locationParser =
-  (\file start end -> Location (makePosition file start) (makePosition file end))
+  Location
     <$ char '('
-    <*> takeWhileP Nothing (/= '[')
     <*> positionParser
     <* string ".."
     <*> positionParser
@@ -233,9 +235,6 @@ stringParser = quotedParser (concat <$> many stringParser')
       ((: []) <$> noneOf ['"', '\\'])
         <|> ((\c1 c2 -> [c1, c2]) <$> char '\\' <*> (oneOf ['\\', '"', '\'', 'n', 'r', 't', 'b', 'x', 'o', 'u'] <|> digitChar))
 
-labelParser :: Parsec Void String Label
-labelParser = lidentParser <|> uidentParser
-
 extensionParser :: Parsec Void String Extension
 extensionParser =
   (,) <$> quotedParser (concat <$> sepBy1 (lidentParser <|> uidentParser) (char '.')) <* newline <*> payloadParser
@@ -280,7 +279,7 @@ argLabelParser =
     <|> (Optional <$ string "Optional" <* hspace <*> stringParser <* newline)
 
 typeVarsParser :: Parsec Void String [String]
-typeVarsParser = sepBy1 (char '\'' *> lidentParser) hspace
+typeVarsParser = sepBy1 (char '\'' *> (lidentParser <|> uidentParser)) hspace
 
 coreTypeParser :: Parsec Void String CoreType
 coreTypeParser =
@@ -377,7 +376,7 @@ coreTypeDescParser =
     <|> ( PtypVar
             <$ string "Ptyp_var"
             <* hspace
-            <*> identParser
+            <*> (lidentParser <|> uidentParser)
             <* newline
         )
 
@@ -421,7 +420,7 @@ patternDescParser =
   ( flip PpatAlias
       <$ string "Ppat_alias"
       <* hspace
-      <*> locParser stringParser
+      <*> locParser (quotedParser valueIdentParser)
       <* newline
       <*> patternParser
   )
@@ -509,7 +508,7 @@ patternDescParser =
     <|> ( PpatUnpack
             <$ string "Ppat_unpack"
             <* hspace
-            <*> locOptionParser uidentParser
+            <*> locOptionParser (lidentParser <|> uidentParser)
             <* newline
         )
     <|> ( PpatVariant
@@ -754,7 +753,11 @@ expressionDescParser =
             <* newline
             <*> listParser expressionParser
         )
-    <|> (PexpUnreachable <$ string "Pexp_unreachable")
+    <|> ( PexpUnreachable
+            <$ string "Pexp_unreachable"
+            -- here should probably be a newline in the printer
+            <* hspace
+        )
     <|> ( PexpVariant
             <$ string "Pexp_variant"
             <* hspace
@@ -824,7 +827,7 @@ valueDescriptionParser =
   (\locName loc attrs coreType piAttrs -> ValueDescription locName coreType piAttrs attrs loc)
     <$ string "value_description"
     <* hspace
-    <*> locParser (quotedParser (lidentParser <|> opParser))
+    <*> locParser (quotedParser valueIdentParser)
     <* hspace
     <*> locationParser
     <* newline
@@ -884,7 +887,7 @@ attributesParser =
 
 payloadParser :: Parsec Void String Payload
 payloadParser =
-  (PStr <$> structureParser)
+  (PStr <$> try structureParser)
     <|> (PSig <$> signatureParser)
     <|> (PTyp <$> coreTypeParser)
     <|> ( PPat
@@ -1403,7 +1406,7 @@ signatureItemDescParser =
             <$ string "Psig_modtypesubst"
             <* hspace
             <*> ( (\locName attrs modtype -> ModuleTypeDeclaration locName modtype attrs)
-                    <$> locParser (quotedParser uidentParser)
+                    <$> locParser (quotedParser (lidentParser <|> uidentParser))
                     <* newline
                     <*> attributesParser
                     <*> modtypeDeclarationParser
@@ -1413,7 +1416,7 @@ signatureItemDescParser =
             <$ string "Psig_modtype"
             <* hspace
             <*> ( (\locName attrs modtype -> ModuleTypeDeclaration locName modtype attrs)
-                    <$> locParser (quotedParser uidentParser)
+                    <$> locParser (quotedParser (lidentParser <|> uidentParser))
                     <* newline
                     <*> attributesParser
                     <*> modtypeDeclarationParser
@@ -1595,7 +1598,7 @@ moduleExprDescParser =
 
 functorParameterParser :: Parsec Void String FunctorParameter
 functorParameterParser =
-  (Unit <$ string "()" <* newline) <|> (Named <$> locOptionParser uidentParser <* newline <*> moduleTypeParser)
+  (Unit <$ string "()" <* newline) <|> (Named <$> locOptionParser moduleNameParser <* newline <*> moduleTypeParser)
 
 structureParser :: Parsec Void String [StructureItem]
 structureParser = listParser structureItemParser
@@ -1626,7 +1629,8 @@ structureItemDescParser =
     <|> ( (\name attrs payload -> PstrExtension (name, payload) attrs)
             <$ string "Pstr_extension"
             <* hspace
-            <*> quotedParser lidentParser
+            -- should probably be `LongIdent` in the `AST` as well
+            <*> (AST.pretty <$> longidentParser)
             <* newline
             <*> attributesParser
             <*> payloadParser
@@ -1650,7 +1654,7 @@ structureItemDescParser =
             <$ string "Pstr_modtype"
             <* hspace
             <*> ( (\name attrs modtype -> ModuleTypeDeclaration name modtype attrs)
-                    <$> locParser (quotedParser uidentParser)
+                    <$> locParser (quotedParser (lidentParser <|> uidentParser))
                     <* newline
                     <*> attributesParser
                     <*> modtypeDeclarationParser
@@ -1790,7 +1794,7 @@ bindingOpParser =
   (\name loc pat expr -> BindingOp name pat expr loc)
     <$ string "<binding_op>"
     <* hspace
-    <*> locParser (quotedParser (nameopParser <|> lidentParser))
+    <*> locParser (quotedParser valueIdentParser)
     <* hspace
     <*> locationParser
     -- here should probably be a newline in the printer
@@ -1835,7 +1839,7 @@ toplevelPhraseParser =
             <$ string "Ptop_dir"
             <* hspace
             <*> ( ToplevelDirective
-                    <$> quotedParser lidentParser
+                    <$> quotedParser (lidentParser <|> uidentParser)
                     <* newline
                     <*> optional directiveArgumentParser
                 )
