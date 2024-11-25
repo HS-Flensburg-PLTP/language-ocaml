@@ -13,5 +13,5 @@ main = do
       result <- Language.OCaml.Parser.parseFile filePath
       case result of
         Right ast -> print ast
-        Left err -> putStrLn err
+        Left errors -> putStrLn (unlines errors)
     _ -> putStrLn "Usage: ocaml-parser <file>"

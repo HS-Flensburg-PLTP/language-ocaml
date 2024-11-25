@@ -3,7 +3,6 @@
 module Language.OCaml.Parser (parseFile, interfaceParser, implementationParser, topPhraseParser) where
 
 import Control.Applicative (optional, some)
-import Control.Exception (SomeException, catch)
 import qualified Data.Char as Char
 import Data.Functor (void)
 import Data.Text (Text)
@@ -13,7 +12,7 @@ import Language.OCaml.AST
 import qualified Language.OCaml.AST as AST
 import Path (File, Path, Rel)
 import qualified Path
-import Shelly (lastStderr, run_, shelly, silently)
+import Shelly (RunFailed (..), Sh, catch_sh, lastStderr, run_, shelly, silently)
 import Text.Megaparsec
   ( Parsec,
     between,
@@ -40,39 +39,39 @@ import Text.Megaparsec.Char
   )
 import Text.Megaparsec.Char.Lexer (decimal, hexadecimal)
 
-parseFile :: Path Rel File -> IO (Either String [AST.StructureItem])
+parseFile :: Path Rel File -> IO (Either [String] [AST.StructureItem])
 parseFile ocamlPath = do
-  eitherOutput <- runOCaml ocamlPath
+  eitherOutput <- shelly (runOCaml ocamlPath)
   case eitherOutput of
-    Left err -> return (Left err)
+    Left errors -> return (Left errors)
     Right output -> do
       writeFile "output.txt" (Text.unpack output)
       let cleanedOutput = unlines (map (dropWhile (== ' ')) (lines (Text.unpack output)))
       case runParser implementationParser (Path.fromRelFile ocamlPath) cleanedOutput of
-        Left err -> return (Left (errorBundlePretty err))
+        Left err -> return (Left [errorBundlePretty err])
         Right ast -> return (Right ast)
 
-runOCaml :: Path Rel File -> IO (Either String Text)
+runOCaml :: Path Rel File -> Sh (Either [String] Text)
 runOCaml modulePath =
-  catch
-    ( shelly
-        ( do
-            silently
-              ( run_
-                  "ocamlc"
-                  [ "-dparsetree",
-                    "-stop-after",
-                    "parsing",
-                    Text.pack (Path.fromRelFile modulePath)
-                  ]
-              )
-            fmap Right lastStderr
-        )
+  catch_sh
+    ( do
+        silently $ -- silently suppresses the output of the ast to stderr
+          run_
+            "ocamlc"
+            [ "-dparsetree",
+              "-stop-after",
+              "parsing",
+              "-w", -- disable warningss
+              "a",
+              "-nopervasives", -- https://github.com/ocaml/ocaml/issues/10821
+              Text.pack (Path.fromRelFile modulePath)
+            ]
+        fmap Right lastStderr -- ocamlc prints the ast to stderr
     )
-    handle
+    handler
   where
-    handle :: SomeException -> IO (Either String Text)
-    handle e = return (Left ("Failed running ocaml with exception " ++ show e))
+    handler :: RunFailed -> Sh (Either [String] Text)
+    handler (RunFailed _ _ _ err) = return (Left (lines (Text.unpack err)))
 
 -- Generic Combinators
 
@@ -371,7 +370,7 @@ coreTypeDescParser =
             <*> closedFlagParser
             <* newline
             <*> listParser labelXBoolXCoreTypeListParser
-            <*> optionParser Newline (listParser stringParser)
+            <*> optionParser Newline (listParser (stringParser <* newline))
         )
     <|> ( PtypVar
             <$ string "Ptyp_var"
@@ -833,7 +832,7 @@ valueDescriptionParser =
     <* newline
     <*> attributesParser
     <*> coreTypeParser
-    <*> listParser (quotedParser attributeNameParser <* newline)
+    <*> listParser (stringParser <* newline)
 
 typeParameterParser :: Parsec Void String CoreType
 typeParameterParser = coreTypeParser
@@ -1384,7 +1383,8 @@ signatureItemDescParser =
     <|> ( (\name attrs payload -> PsigExtension (name, payload) attrs)
             <$ string "Psig_extension"
             <* hspace
-            <*> quotedParser lidentParser
+            -- should probably be `LongIdent` in the `AST` as well
+            <*> (AST.pretty <$> longidentParser)
             <* newline
             <*> attributesParser
             <*> payloadParser
