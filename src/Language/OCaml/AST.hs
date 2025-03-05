@@ -1,7 +1,8 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 
 module Language.OCaml.AST
-  ( ToplevelPhrase (..),
+  ( isOperatorName,
+    ToplevelPhrase (..),
     Location (..),
     Position (..),
     Loc (..),
@@ -87,7 +88,24 @@ module Language.OCaml.AST
   )
 where
 
+import qualified Data.Char as Char
 import Data.Data (Data)
+
+isOperatorName :: String -> Bool
+isOperatorName name =
+  not (any Char.isAlphaNum name)
+    || name `elem` ["mod", "land", "lor", "lxor", "lsl", "lsr", "asr"]
+    || isLetop name
+    || isAndop name
+  where
+    isLetop ('l' : 'e' : 't' : c : rest) = c `elem` kwdopchar && all (`elem` dotsymbolchar) rest
+    isLetop _ = False
+    isAndop ('a' : 'n' : 'd' : c : rest) = c `elem` kwdopchar && all (`elem` dotsymbolchar) rest
+    isAndop _ = False
+    kwdopchar :: [Char]
+    kwdopchar = "$&*+-/<=>@^|"
+    dotsymbolchar :: [Char]
+    dotsymbolchar = "!$%&*+-/:=>?@^|"
 
 -- Locations
 
