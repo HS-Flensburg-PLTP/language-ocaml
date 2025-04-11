@@ -7,12 +7,13 @@ import qualified Data.Char as Char
 import Data.Functor (void)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Version (Version (..), showVersion)
 import Data.Void (Void)
 import Language.OCaml.AST
 import qualified Language.OCaml.AST as AST
 import Path (File, Path, Rel)
 import qualified Path
-import Shelly (RunFailed (..), Sh, catch_sh, lastStderr, run_, shelly, silently)
+import Shelly (RunFailed (..), Sh, catch_sh, lastStderr, run, run_, shelly, silently)
 import Text.Megaparsec
   ( Parsec,
     between,
@@ -38,21 +39,28 @@ import Text.Megaparsec.Char
     upperChar,
   )
 import Text.Megaparsec.Char.Lexer (decimal, hexadecimal)
+import Text.Read (readMaybe)
 
-parseFile :: Path Rel File -> IO (Either [String] [AST.StructureItem])
+parseFile :: Path Rel File -> IO (Either String [AST.StructureItem])
 parseFile ocamlPath = do
-  eitherOutput <- shelly (runOCaml ocamlPath)
-  case eitherOutput of
-    Left errors -> return (Left errors)
-    Right output -> do
-      writeFile "output.txt" (Text.unpack output)
-      let cleanedOutput = unlines (map (dropWhile (== ' ')) (lines (Text.unpack output)))
-      case runParser implementationParser (Path.fromRelFile ocamlPath) cleanedOutput of
-        Left err -> return (Left [errorBundlePretty err])
-        Right ast -> return (Right ast)
+  maybeVersion <- shelly ocamlcVersion
+  case maybeVersion of
+    Nothing -> return (Left "The command `ocamlc --version` did not yield a valid version")
+    Just (Version [5, 2, 0] _) -> do
+      eitherOutput <- shelly (ocamlcParsetree ocamlPath)
+      case eitherOutput of
+        Left errors -> return (Left errors)
+        Right output -> do
+          -- writeFile "output.txt" (Text.unpack output)
+          let cleanedOutput = unlines (map (dropWhile (== ' ')) (lines (Text.unpack output)))
+          case runParser implementationParser (Path.fromRelFile ocamlPath) cleanedOutput of
+            Left err -> return (Left (errorBundlePretty err))
+            Right ast -> return (Right ast)
+    Just version ->
+      return (Left ("ocamlc has version " ++ showVersion version ++ " but only 5.2.0 is supported"))
 
-runOCaml :: Path Rel File -> Sh (Either [String] Text)
-runOCaml modulePath =
+ocamlcParsetree :: Path Rel File -> Sh (Either String Text)
+ocamlcParsetree modulePath =
   catch_sh
     ( do
         silently $ -- silently suppresses the output of the ast to stderr
@@ -70,8 +78,13 @@ runOCaml modulePath =
     )
     handler
   where
-    handler :: RunFailed -> Sh (Either [String] Text)
-    handler (RunFailed _ _ _ err) = return (Left (lines (Text.unpack err)))
+    handler :: RunFailed -> Sh (Either String Text)
+    handler (RunFailed _ _ _ err) = return (Left (Text.unpack err))
+
+ocamlcVersion :: Sh (Maybe Version)
+ocamlcVersion = do
+  output <- run "ocmalc" ["--version"]
+  return (readMaybe (Text.unpack output))
 
 -- Generic Combinators
 
