@@ -39,6 +39,10 @@ ghc-options:
 
 library:
   source-dirs: src
+  exposed-modules:
+    Language.OCaml.AST
+    Language.OCaml.Parser
+  other-modules: []
 
 executables:
   language-ocaml-exe:
